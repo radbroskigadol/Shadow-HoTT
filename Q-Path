@@ -1,0 +1,1009 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from itertools import product
+from typing import Dict, List, Optional, Tuple, Sequence, Any, Iterable
+
+
+# ============================================================
+# 4-valued logic cache values
+# ============================================================
+
+class Val(Enum):
+    T = "True_Only"
+    F = "False_Only"
+    B = "Both_Glut"
+    U = "Neither_Gap"
+
+
+# ============================================================
+# Instruction representation
+# ============================================================
+
+@dataclass(frozen=True)
+class Instruction:
+    op: str                    # "H", "S", "CNOT", "MEASURE"
+    target: Optional[int] = None
+    control: Optional[int] = None
+
+
+# ============================================================
+# Pauli algebra helpers (exact signed transport for H, S, CNOT)
+# ============================================================
+
+# Single-qubit multiplication:
+# P * Q = phase * R, phase in {±1, ±i}
+_SINGLE_MUL: Dict[Tuple[str, str], Tuple[complex, str]] = {
+    ('I', 'I'): (1, 'I'),
+    ('I', 'X'): (1, 'X'),
+    ('I', 'Y'): (1, 'Y'),
+    ('I', 'Z'): (1, 'Z'),
+
+    ('X', 'I'): (1, 'X'),
+    ('X', 'X'): (1, 'I'),
+    ('X', 'Y'): (1j, 'Z'),
+    ('X', 'Z'): (-1j, 'Y'),
+
+    ('Y', 'I'): (1, 'Y'),
+    ('Y', 'X'): (-1j, 'Z'),
+    ('Y', 'Y'): (1, 'I'),
+    ('Y', 'Z'): (1j, 'X'),
+
+    ('Z', 'I'): (1, 'Z'),
+    ('Z', 'X'): (1j, 'Y'),
+    ('Z', 'Y'): (-1j, 'X'),
+    ('Z', 'Z'): (1, 'I'),
+}
+
+
+def _pauli_word_mul(word1: str, word2: str) -> Tuple[complex, str]:
+    """Multiply two Pauli words of equal length."""
+    if len(word1) != len(word2):
+        raise ValueError("Pauli words must have same length")
+    phase: complex = 1
+    out: List[str] = []
+    for a, b in zip(word1, word2):
+        ph, ch = _SINGLE_MUL[(a, b)]
+        phase *= ph
+        out.append(ch)
+    return phase, "".join(out)
+
+
+def _phase_to_real_sign(phase: complex) -> int:
+    """
+    For Clifford conjugation of Hermitian Pauli observables, the result phase is ±1.
+    """
+    if abs(phase - 1) < 1e-9:
+        return +1
+    if abs(phase + 1) < 1e-9:
+        return -1
+    raise ValueError(f"Expected real phase ±1, got {phase!r}")
+
+
+def _is_event_label(label: str) -> bool:
+    return label.startswith("EV:")
+
+
+def _label_to_signed_word(label: str) -> Tuple[int, str]:
+    """
+    '+XYZ' -> (+1, 'XYZ'); '-IXZ' -> (-1, 'IXZ')
+    """
+    if not label or label[0] not in "+-":
+        raise ValueError(f"Not a signed Pauli label: {label!r}")
+    sign = +1 if label[0] == "+" else -1
+    return sign, label[1:]
+
+
+def _signed_word_to_label(sign: int, word: str) -> str:
+    if sign not in (+1, -1):
+        raise ValueError("sign must be ±1")
+    return ("+" if sign == +1 else "-") + word
+
+
+def _distinguished_pauli_label(num_wires: int, wire: int, pauli: str, sign: str = "+") -> str:
+    """
+    Builds labels like '+ZI' (2 wires, wire 0, Z), '+IZI', etc.
+    """
+    if sign not in {"+", "-"}:
+        raise ValueError("sign must be '+' or '-'")
+    if pauli not in {"X", "Y", "Z"}:
+        raise ValueError("pauli must be one of X,Y,Z")
+    if wire < 0 or wire >= num_wires:
+        raise IndexError("wire out of range")
+    chars = ["I"] * num_wires
+    chars[wire] = pauli
+    return sign + "".join(chars)
+
+
+def _generate_cnot_local_pair_table() -> Dict[Tuple[str, str], Tuple[int, str, str]]:
+    """
+    Exact local conjugation table for CNOT(control -> target) on the pair
+    (P_control, P_target). Returns (sign, new_control_char, new_target_char).
+    """
+    # Generator images under conjugation by CNOT(c -> t)
+    # Xc -> Xc Xt
+    # Zc -> Zc
+    # Xt -> Xt
+    # Zt -> Zc Zt
+    gen_img: Dict[Tuple[str, str], Tuple[int, str]] = {
+        ('I', 'I'): (+1, "II"),
+        ('X', 'I'): (+1, "XX"),
+        ('Y', 'I'): (+1, "YX"),   # derived via Y = iXZ, but generator image fixed here
+        ('Z', 'I'): (+1, "ZI"),
+        ('I', 'X'): (+1, "IX"),
+        ('I', 'Y'): (+1, "ZY"),
+        ('I', 'Z'): (+1, "ZZ"),
+    }
+
+    table: Dict[Tuple[str, str], Tuple[int, str, str]] = {}
+    for pc in "IXYZ":
+        for pt in "IXYZ":
+            s1, w1 = gen_img[(pc, 'I')]
+            s2, w2 = gen_img[('I', pt)]
+            ph, w = _pauli_word_mul(w1, w2)
+            sign = s1 * s2 * _phase_to_real_sign(ph)
+            table[(pc, pt)] = (sign, w[0], w[1])
+    return table
+
+
+_CNOT_LOCAL_TABLE = _generate_cnot_local_pair_table()
+
+
+# ============================================================
+# Shadow State
+# ============================================================
+
+class ShadowState:
+    """
+    Shadow semantics state.
+
+    bi:
+      bilateral scores label -> [truth_score, falsity_score]
+    cache:
+      thresholded 4-valued map label -> Val
+
+    sparse mode:
+      bi/cache only store labels whose bilateral score is not numerically zero
+      and whose thresholded value is not U, respectively.
+      Missing labels are interpreted as implicit (0,0) -> U.
+    """
+
+    def __init__(
+        self,
+        num_wires: int,
+        theta: float = 0.5,
+        *,
+        sparse: bool = False,
+        epsilon: float = 0.0,
+    ):
+        if num_wires <= 0:
+            raise ValueError("num_wires must be positive")
+        if not (0.0 <= theta <= 1.0):
+            raise ValueError("theta must be in [0,1]")
+        if epsilon < 0:
+            raise ValueError("epsilon must be nonnegative")
+
+        self.num_wires = num_wires
+        self.theta = theta
+        self.sparse = sparse
+        self.epsilon = epsilon
+
+        self.carrier: Optional[str] = None
+        self.provenance: int = 0
+        self.last_measurements: Dict[int, int] = {}
+
+        self.total_pauli_labels = 2 * (4 ** self.num_wires)
+        self.total_event_labels = 2 * self.num_wires
+        self.total_labels = self.total_pauli_labels + self.total_event_labels
+
+        self.bi: Dict[str, List[float]] = self._initialize_bilateral_layer()
+        self.cache: Dict[str, Val] = {}
+        self.refresh_cache()
+
+    def copy(self) -> "ShadowState":
+        new_state = ShadowState(
+            self.num_wires,
+            theta=self.theta,
+            sparse=self.sparse,
+            epsilon=self.epsilon,
+        )
+        new_state.carrier = self.carrier
+        new_state.provenance = self.provenance
+        new_state.last_measurements = dict(self.last_measurements)
+        new_state.bi = {k: [v[0], v[1]] for k, v in self.bi.items()}
+        new_state.cache = dict(self.cache)
+        return new_state
+
+    def _is_zero_pair(self, a: float, b: float) -> bool:
+        eps = self.epsilon
+        return abs(a) <= eps and abs(b) <= eps
+
+    def _maybe_store_score(self, label: str, a: float, b: float) -> None:
+        if self.sparse and self._is_zero_pair(a, b):
+            self.bi.pop(label, None)
+        else:
+            self.bi[label] = [float(a), float(b)]
+
+    def _initialize_bilateral_layer(self) -> Dict[str, List[float]]:
+        bi: Dict[str, List[float]] = {}
+
+        if not self.sparse:
+            # Dense: explicitly store all signed Pauli words + event labels
+            for word_tuple in product("IXYZ", repeat=self.num_wires):
+                word = "".join(word_tuple)
+                bi[f"+{word}"] = [0.0, 0.0]
+                bi[f"-{word}"] = [0.0, 0.0]
+            for w in range(self.num_wires):
+                bi[f"EV:{w}:0"] = [0.0, 0.0]
+                bi[f"EV:{w}:1"] = [0.0, 0.0]
+
+        # Identity defaults
+        id_word = "I" * self.num_wires
+        bi[f"+{id_word}"] = [1.0, 0.0]
+        bi[f"-{id_word}"] = [0.0, 1.0]
+
+        # Default |0...0>-like local distinguished Z bias
+        for w in range(self.num_wires):
+            bi[_distinguished_pauli_label(self.num_wires, w, "Z", "+")] = [1.0, 0.0]
+            bi[_distinguished_pauli_label(self.num_wires, w, "Z", "-")] = [0.0, 1.0]
+
+            # Distinguished local X/Y start as gaps (dense only stores explicitly)
+            if not self.sparse:
+                for p in ("X", "Y"):
+                    bi[_distinguished_pauli_label(self.num_wires, w, p, "+")] = [0.0, 0.0]
+                    bi[_distinguished_pauli_label(self.num_wires, w, p, "-")] = [0.0, 0.0]
+
+        return bi
+
+    def _prune_bi(self) -> None:
+        if not self.sparse:
+            return
+        # Remove any explicit zero-pairs in sparse mode
+        to_delete = [k for k, (a, b) in self.bi.items() if self._is_zero_pair(a, b)]
+        for k in to_delete:
+            del self.bi[k]
+
+    def refresh_cache(self, theta: Optional[float] = None) -> None:
+        """
+        Galois twist / thresholding:
+          (a,b) -> T/F/B/U using threshold theta.
+
+        In sparse mode, cache stores only non-U labels.
+        Missing cache entries are interpreted as U.
+        """
+        if theta is None:
+            theta = self.theta
+
+        self.cache = {}
+        for obs, scores in self.bi.items():
+            a, b = scores
+            if a >= theta and b < theta:
+                self.cache[obs] = Val.T
+            elif a < theta and b >= theta:
+                self.cache[obs] = Val.F
+            elif a >= theta and b >= theta:
+                self.cache[obs] = Val.B
+            else:
+                if not self.sparse:
+                    self.cache[obs] = Val.U
+                # in sparse mode omit U entries
+
+        if self.sparse:
+            # cache may still contain entries explicitly classified U due to numerical edge cases
+            self.cache = {k: v for k, v in self.cache.items() if v != Val.U}
+
+    def determinized(self) -> bool:
+        """Simple determinization predicate: no gluts and no gaps."""
+        sig = self.signature4()
+        # [T, F, B, U]
+        return sig[2] == 0 and sig[3] == 0
+
+    def signature4(self) -> List[int]:
+        return get_signature_4(self)
+
+    def __repr__(self) -> str:
+        return (
+            f"ShadowState(num_wires={self.num_wires}, theta={self.theta}, "
+            f"sparse={self.sparse}, carrier={self.carrier!r}, provenance={self.provenance}, "
+            f"signature4={self.signature4()})"
+        )
+
+
+# ============================================================
+# Bilateral transport / reset primitives
+# ============================================================
+
+def _transport_H(bi: Dict[str, List[float]], target_wire: int) -> Dict[str, List[float]]:
+    """
+    Exact conjugation by H on target wire:
+      X <-> Z
+      Y -> -Y
+      I -> I
+    """
+    out: Dict[str, List[float]] = {}
+    for label, scores in bi.items():
+        if _is_event_label(label):
+            out[label] = [scores[0], scores[1]]
+            continue
+
+        sign, word = _label_to_signed_word(label)
+        chars = list(word)
+        ch = chars[target_wire]
+
+        if ch == "X":
+            chars[target_wire] = "Z"
+        elif ch == "Z":
+            chars[target_wire] = "X"
+        elif ch == "Y":
+            sign *= -1  # H Y H = -Y
+        # I unchanged
+
+        out[_signed_word_to_label(sign, "".join(chars))] = [scores[0], scores[1]]
+    return out
+
+
+def _transport_S(bi: Dict[str, List[float]], target_wire: int) -> Dict[str, List[float]]:
+    """
+    Exact conjugation by S on target wire:
+      X -> Y
+      Y -> -X
+      Z -> Z
+      I -> I
+    """
+    out: Dict[str, List[float]] = {}
+    for label, scores in bi.items():
+        if _is_event_label(label):
+            out[label] = [scores[0], scores[1]]
+            continue
+
+        sign, word = _label_to_signed_word(label)
+        chars = list(word)
+        ch = chars[target_wire]
+
+        if ch == "X":
+            chars[target_wire] = "Y"
+        elif ch == "Y":
+            chars[target_wire] = "X"
+            sign *= -1   # S Y S^\dagger = -X
+        elif ch == "Z":
+            pass
+        # I unchanged
+
+        out[_signed_word_to_label(sign, "".join(chars))] = [scores[0], scores[1]]
+    return out
+
+
+def _transport_CNOT(
+    bi: Dict[str, List[float]],
+    control_wire: int,
+    target_wire: int,
+) -> Dict[str, List[float]]:
+    """
+    Exact signed Pauli-label transport under CNOT(control -> target).
+    Uses exact local conjugation on the (control,target) pair.
+    """
+    if control_wire == target_wire:
+        raise ValueError("control_wire and target_wire must differ")
+
+    out: Dict[str, List[float]] = {}
+    for label, scores in bi.items():
+        if _is_event_label(label):
+            out[label] = [scores[0], scores[1]]
+            continue
+
+        sign, word = _label_to_signed_word(label)
+        chars = list(word)
+
+        pc = chars[control_wire]
+        pt = chars[target_wire]
+        local_sign, new_pc, new_pt = _CNOT_LOCAL_TABLE[(pc, pt)]
+
+        sign *= local_sign
+        chars[control_wire] = new_pc
+        chars[target_wire] = new_pt
+
+        out[_signed_word_to_label(sign, "".join(chars))] = [scores[0], scores[1]]
+    return out
+
+
+def _reset_event_labels(bi: Dict[str, List[float]]) -> Dict[str, List[float]]:
+    """
+    Reset all event labels to (0,0). (Sparse pruning is handled by state.)
+    """
+    out = {k: [v[0], v[1]] for k, v in bi.items()}
+    for k in list(out.keys()):
+        if _is_event_label(k):
+            out[k] = [0.0, 0.0]
+    return out
+
+
+# ============================================================
+# Gate and measurement application
+# ============================================================
+
+def apply_gate(
+    state: ShadowState,
+    gate_type: str,
+    target_wire: int,
+    control_wire: Optional[int] = None
+) -> ShadowState:
+    """
+    Applies a gate, updating:
+      1) transport on Pauli labels
+      2) reset of event labels
+      3) eager cache refresh
+    """
+    gate = gate_type.upper()
+    new_state = state.copy()
+    new_state.carrier = gate
+    new_state.provenance += 1
+
+    # 1. Transport Pauli labels
+    if gate == "H":
+        new_state.bi = _transport_H(new_state.bi, target_wire)
+    elif gate == "S":
+        new_state.bi = _transport_S(new_state.bi, target_wire)
+    elif gate == "CNOT":
+        if control_wire is None:
+            raise ValueError("CNOT requires control_wire")
+        new_state.bi = _transport_CNOT(new_state.bi, control_wire, target_wire)
+    else:
+        raise ValueError(f"Unsupported gate_type: {gate_type!r}")
+
+    # 2. Reset measurement event labels
+    new_state.bi = _reset_event_labels(new_state.bi)
+
+    # 3. Sparse pruning + eager coherence
+    new_state._prune_bi()
+    new_state.refresh_cache()
+
+    return new_state
+
+
+def apply_measurement(state: ShadowState, wire: int) -> ShadowState:
+    """
+    Z-basis measurement selector based on distinguished ±Z labels.
+    Deterministic tie-break -> 0.
+    """
+    pos_z_label = _distinguished_pauli_label(state.num_wires, wire, "Z", sign="+")
+    neg_z_label = _distinguished_pauli_label(state.num_wires, wire, "Z", sign="-")
+
+    val_pos = state.cache.get(pos_z_label, Val.U)
+    val_neg = state.cache.get(neg_z_label, Val.U)
+
+    pos_designated = val_pos in (Val.T, Val.B)
+    neg_designated = val_neg in (Val.T, Val.B)
+
+    if pos_designated and not neg_designated:
+        outcome = 0
+    elif neg_designated and not pos_designated:
+        outcome = 1
+    else:
+        outcome = 0  # deterministic tie-break
+
+    return _finalize_measurement_state(state, wire, outcome)
+
+
+def _finalize_measurement_state(state: ShadowState, wire: int, outcome: int) -> ShadowState:
+    """
+    Measurement profile reset:
+      - resets all event labels
+      - writes measurement event on the measured wire
+      - enforces distinguished ±Z profile on measured wire
+      - clears distinguished X/Y on measured wire
+      - clears all Pauli labels touching X/Y on measured wire (collapse proxy)
+    """
+    if outcome not in (0, 1):
+        raise ValueError("Outcome must be 0 or 1")
+
+    new_state = state.copy()
+    new_state.carrier = f"MEASURE_Z[{wire}]={outcome}"
+    new_state.provenance += 1
+    new_state.last_measurements[wire] = outcome
+
+    # Reset all event labels
+    new_state.bi = _reset_event_labels(new_state.bi)
+
+    # Write event labels for this wire
+    ev0 = f"EV:{wire}:0"
+    ev1 = f"EV:{wire}:1"
+    if outcome == 0:
+        new_state._maybe_store_score(ev0, 1.0, 0.0)
+        new_state._maybe_store_score(ev1, 0.0, 1.0)
+    else:
+        new_state._maybe_store_score(ev0, 0.0, 1.0)
+        new_state._maybe_store_score(ev1, 1.0, 0.0)
+
+    # Enforce distinguished local Z labels
+    pos_z = _distinguished_pauli_label(new_state.num_wires, wire, "Z", sign="+")
+    neg_z = _distinguished_pauli_label(new_state.num_wires, wire, "Z", sign="-")
+    if outcome == 0:
+        new_state._maybe_store_score(pos_z, 1.0, 0.0)
+        new_state._maybe_store_score(neg_z, 0.0, 1.0)
+    else:
+        new_state._maybe_store_score(pos_z, 0.0, 1.0)
+        new_state._maybe_store_score(neg_z, 1.0, 0.0)
+
+    # Distinguished local X/Y become gaps
+    for pauli in ("X", "Y"):
+        p = _distinguished_pauli_label(new_state.num_wires, wire, pauli, sign="+")
+        n = _distinguished_pauli_label(new_state.num_wires, wire, pauli, sign="-")
+        new_state._maybe_store_score(p, 0.0, 0.0)
+        new_state._maybe_store_score(n, 0.0, 0.0)
+
+    # Collapse proxy: any signed Pauli word with X/Y on measured wire becomes (0,0)
+    for label in list(new_state.bi.keys()):
+        if _is_event_label(label):
+            continue
+        _, word = _label_to_signed_word(label)
+        if word[wire] in ("X", "Y"):
+            new_state._maybe_store_score(label, 0.0, 0.0)
+
+    new_state._prune_bi()
+    new_state.refresh_cache()
+    return new_state
+
+
+# ============================================================
+# Diagnostics
+# ============================================================
+
+def get_signature_4(state: ShadowState) -> List[int]:
+    """
+    Returns [count_T, count_F, count_B, count_U].
+    In sparse mode, missing cache labels are implicit U.
+    """
+    counts = [0, 0, 0, 0]
+    for val in state.cache.values():
+        if val == Val.T:
+            counts[0] += 1
+        elif val == Val.F:
+            counts[1] += 1
+        elif val == Val.B:
+            counts[2] += 1
+        elif val == Val.U:
+            counts[3] += 1  # dense-only path
+
+    # Implicit U count in sparse mode (and harmlessly zero in dense if cache is full)
+    explicit_count = sum(counts)
+    if explicit_count > state.total_labels:
+        raise RuntimeError("Signature count exceeds total label count")
+    counts[3] += state.total_labels - explicit_count
+    return counts
+
+
+def calculate_shock_profile(trace: List[ShadowState]) -> List[int]:
+    """
+    ΔΣ_4: l1-norm differences between consecutive Signature_4 vectors.
+    """
+    shocks: List[int] = []
+    for i in range(1, len(trace)):
+        sig_prev = get_signature_4(trace[i - 1])
+        sig_curr = get_signature_4(trace[i])
+        shock = sum(abs(curr - prev) for curr, prev in zip(sig_curr, sig_prev))
+        shocks.append(shock)
+    return shocks
+
+
+def check_determinization(state: ShadowState) -> bool:
+    """
+    True iff no gluts (B) and no gaps (U) remain.
+    """
+    return state.determinized()
+
+
+# ============================================================
+# Execution engine
+# ============================================================
+
+def execute_circuit(
+    circuit: Sequence[Instruction],
+    num_wires: Optional[int] = None,
+    *,
+    theta: float = 0.5,
+    sparse: bool = False,
+    epsilon: float = 0.0,
+) -> List[ShadowState]:
+    """
+    Executes a circuit and returns the full shadow trace.
+    """
+    if num_wires is None:
+        max_wire = -1
+        for inst in circuit:
+            if inst.target is not None:
+                max_wire = max(max_wire, inst.target)
+            if inst.control is not None:
+                max_wire = max(max_wire, inst.control)
+        num_wires = (max_wire + 1) if max_wire >= 0 else 1
+
+    state = ShadowState(num_wires, theta=theta, sparse=sparse, epsilon=epsilon)
+    trace = [state]
+
+    for inst in circuit:
+        op = inst.op.upper()
+
+        if op == "H":
+            if inst.target is None:
+                raise ValueError("H requires target")
+            state = apply_gate(state, "H", target_wire=inst.target)
+
+        elif op == "S":
+            if inst.target is None:
+                raise ValueError("S requires target")
+            state = apply_gate(state, "S", target_wire=inst.target)
+
+        elif op == "CNOT":
+            if inst.control is None or inst.target is None:
+                raise ValueError("CNOT requires control and target")
+            state = apply_gate(state, "CNOT", target_wire=inst.target, control_wire=inst.control)
+
+        elif op in {"MEASURE", "M", "MEASURE_Z"}:
+            if inst.target is None:
+                raise ValueError("MEASURE requires target wire")
+            state = apply_measurement(state, inst.target)
+
+        else:
+            raise ValueError(f"Unsupported instruction op: {inst.op!r}")
+
+        trace.append(state)
+
+    return trace
+
+
+# ============================================================
+# Route evaluation
+# ============================================================
+
+def evaluate_compiler_routes(
+    circuit_variants: Sequence[Sequence[Instruction]],
+    *,
+    num_wires: Optional[int] = None,
+    theta: float = 0.5,
+    sparse: bool = False,
+    epsilon: float = 0.0,
+) -> Dict[str, Any]:
+    """
+    Runs each circuit variant and scores it by:
+      1) total logical shock (sum of ΔΣ_4)
+      2) final glut density
+      3) circuit_id (stable tie-break)
+
+    Returns all reports + selected optimum.
+    """
+    reports: List[Dict[str, Any]] = []
+
+    for idx, circuit in enumerate(circuit_variants):
+        trace = execute_circuit(
+            circuit,
+            num_wires=num_wires,
+            theta=theta,
+            sparse=sparse,
+            epsilon=epsilon,
+        )
+
+        shocks = calculate_shock_profile(trace)
+        total_variation = sum(shocks)
+        final_signature = get_signature_4(trace[-1])
+
+        denom = sum(final_signature)
+        glut_density = (final_signature[2] / denom) if denom else 0.0
+        gap_density = (final_signature[3] / denom) if denom else 0.0
+
+        reports.append({
+            "circuit_id": idx,
+            "theta": theta,
+            "sparse": sparse,
+            "total_variation": total_variation,
+            "glut_density": glut_density,
+            "gap_density": gap_density,
+            "is_determinized": check_determinization(trace[-1]),
+            "final_signature": final_signature,
+            "shock_profile": shocks,
+            "final_state": trace[-1],
+        })
+
+    optimal_route = min(
+        reports,
+        key=lambda x: (x["total_variation"], x["glut_density"], x["circuit_id"])
+    )
+
+    return {
+        "optimal_route": optimal_route,
+        "all_reports": reports,
+    }
+
+
+# ============================================================
+# θ-sweep diagnostics (new)
+# ============================================================
+
+def theta_sweep_report(
+    circuit_variants: Sequence[Sequence[Instruction]],
+    thetas: Iterable[float],
+    *,
+    num_wires: Optional[int] = None,
+    sparse: bool = False,
+    epsilon: float = 0.0,
+) -> Dict[str, Any]:
+    """
+    Runs route evaluation across a sweep of thresholds θ and reports:
+      - per-θ winner and reports
+      - winner sequence
+      - winner transitions
+      - winner histogram
+      - ranking stability summary
+
+    This is useful for sensitivity analysis / phase-behavior of thresholding.
+    """
+    theta_results: List[Dict[str, Any]] = []
+    winner_sequence: List[Tuple[float, int]] = []
+
+    for theta in thetas:
+        res = evaluate_compiler_routes(
+            circuit_variants,
+            num_wires=num_wires,
+            theta=theta,
+            sparse=sparse,
+            epsilon=epsilon,
+        )
+        winner_id = res["optimal_route"]["circuit_id"]
+        theta_results.append({
+            "theta": theta,
+            "winner_id": winner_id,
+            "optimal_route": res["optimal_route"],
+            "all_reports": res["all_reports"],
+        })
+        winner_sequence.append((theta, winner_id))
+
+    # Winner histogram
+    winner_hist: Dict[int, int] = {}
+    for _, wid in winner_sequence:
+        winner_hist[wid] = winner_hist.get(wid, 0) + 1
+
+    # Winner transitions across adjacent theta points
+    transitions: List[Dict[str, Any]] = []
+    for i in range(1, len(winner_sequence)):
+        theta_prev, w_prev = winner_sequence[i - 1]
+        theta_curr, w_curr = winner_sequence[i]
+        if w_prev != w_curr:
+            transitions.append({
+                "from_theta": theta_prev,
+                "to_theta": theta_curr,
+                "from_winner": w_prev,
+                "to_winner": w_curr,
+            })
+
+    # Stability summary
+    if winner_hist:
+        modal_winner = max(winner_hist.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+        modal_count = winner_hist[modal_winner]
+        stability_fraction = modal_count / len(winner_sequence)
+    else:
+        modal_winner = None
+        stability_fraction = 0.0
+
+    return {
+        "theta_results": theta_results,
+        "winner_sequence": winner_sequence,
+        "winner_histogram": winner_hist,
+        "winner_transitions": transitions,
+        "modal_winner": modal_winner,
+        "stability_fraction": stability_fraction,
+        "num_theta_points": len(winner_sequence),
+    }
+
+
+# ============================================================
+# Semantic soundness checks (code-level verification harness)
+# ============================================================
+
+def _transport_single_label(label: str, op: str, target: int, control: Optional[int] = None) -> str:
+    """
+    Apply a transport to a single signed Pauli label by passing a singleton bi dict.
+    """
+    bi = {label: [1.0, 0.0]}
+    opu = op.upper()
+    if opu == "H":
+        out = _transport_H(bi, target)
+    elif opu == "S":
+        out = _transport_S(bi, target)
+    elif opu == "CNOT":
+        if control is None:
+            raise ValueError("CNOT needs control")
+        out = _transport_CNOT(bi, control, target)
+    else:
+        raise ValueError(op)
+    if len(out) != 1:
+        raise RuntimeError("Transport on singleton label should return singleton label map")
+    return next(iter(out.keys()))
+
+
+def verify_transport_soundness(max_qubits: int = 3) -> Dict[str, Any]:
+    """
+    Exhaustive code-level verification harness for the implemented Clifford transports.
+
+    Checks:
+      - H^2 = I on all signed Pauli labels (for all targets)
+      - S^4 = I on all signed Pauli labels (for all targets)
+      - CNOT^2 = I on all signed Pauli labels (for all ordered wire pairs)
+      - Generator image sanity examples
+
+    Returns a structured report; raises AssertionError on failure.
+    """
+    if max_qubits < 1:
+        raise ValueError("max_qubits must be >= 1")
+
+    report: Dict[str, Any] = {
+        "max_qubits": max_qubits,
+        "checks": [],
+        "passed": True,
+    }
+
+    # Explicit image sanity checks (single-qubit)
+    # H: X<->Z, Y->-Y
+    lbl = _transport_single_label("+X", "H", target=0)
+    assert lbl == "+Z"
+    lbl = _transport_single_label("+Z", "H", target=0)
+    assert lbl == "+X"
+    lbl = _transport_single_label("+Y", "H", target=0)
+    assert lbl == "-Y"
+
+    # S: X->Y, Y->-X, Z->Z
+    lbl = _transport_single_label("+X", "S", target=0)
+    assert lbl == "+Y"
+    lbl = _transport_single_label("+Y", "S", target=0)
+    assert lbl == "-X"
+    lbl = _transport_single_label("+Z", "S", target=0)
+    assert lbl == "+Z"
+
+    report["checks"].append("single-qubit generator image sanity checks passed")
+
+    for n in range(1, max_qubits + 1):
+        words = ["".join(w) for w in product("IXYZ", repeat=n)]
+        labels = [s + w for w in words for s in "+-"]
+
+        # H^2 = I and S^4 = I on every target
+        for t in range(n):
+            for label in labels:
+                l1 = _transport_single_label(label, "H", target=t)
+                l2 = _transport_single_label(l1, "H", target=t)
+                assert l2 == label, f"H^2 failed for n={n}, t={t}, label={label}"
+
+                s1 = _transport_single_label(label, "S", target=t)
+                s2 = _transport_single_label(s1, "S", target=t)
+                s3 = _transport_single_label(s2, "S", target=t)
+                s4 = _transport_single_label(s3, "S", target=t)
+                assert s4 == label, f"S^4 failed for n={n}, t={t}, label={label}"
+
+        report["checks"].append(f"H^2 and S^4 exhaustive on n={n} passed")
+
+        # CNOT^2 = I on every ordered pair c!=t
+        if n >= 2:
+            for c in range(n):
+                for t in range(n):
+                    if c == t:
+                        continue
+                    for label in labels:
+                        l1 = _transport_single_label(label, "CNOT", target=t, control=c)
+                        l2 = _transport_single_label(l1, "CNOT", target=t, control=c)
+                        assert l2 == label, f"CNOT^2 failed for n={n}, c={c}, t={t}, label={label}"
+
+            report["checks"].append(f"CNOT^2 exhaustive on n={n} passed")
+
+    return report
+
+
+# ============================================================
+# Smoke tests + demo
+# ============================================================
+
+def _run_smoke_tests() -> None:
+    # H sanity: Y -> -Y, H^2 = I
+    s = ShadowState(1)
+    s._maybe_store_score("+Y", 1.0, 0.0)
+    s._maybe_store_score("-Y", 0.0, 1.0)
+    s.refresh_cache()
+    t = apply_gate(s, "H", target_wire=0)
+    assert t.bi.get("-Y") == [1.0, 0.0], "H should map +Y to -Y"
+    tt = apply_gate(t, "H", target_wire=0)
+    assert tt.bi.get("+Y") == [1.0, 0.0], "H^2 should restore +Y"
+
+    # S sanity: X -> Y, Y -> -X
+    s2 = ShadowState(1)
+    s2._maybe_store_score("+X", 1.0, 0.0)
+    s2.refresh_cache()
+    u = apply_gate(s2, "S", target_wire=0)
+    assert u.bi.get("+Y") == [1.0, 0.0], "S should map +X to +Y"
+
+    s3 = ShadowState(1)
+    s3._maybe_store_score("+Y", 1.0, 0.0)
+    s3.refresh_cache()
+    v = apply_gate(s3, "S", target_wire=0)
+    assert v.bi.get("-X") == [1.0, 0.0], "S should map +Y to -X"
+
+    # CNOT sanity: +XI -> +XX
+    s4 = ShadowState(2)
+    s4._maybe_store_score("+XI", 1.0, 0.0)
+    s4.refresh_cache()
+    c = apply_gate(s4, "CNOT", target_wire=1, control_wire=0)
+    assert c.bi.get("+XX") == [1.0, 0.0], "CNOT should map XI -> XX"
+
+    # Measurement returns valid state and writes event labels
+    m = apply_measurement(c, wire=0)
+    assert isinstance(m, ShadowState)
+    assert "EV:0:0" in m.bi or "EV:0:1" in m.bi
+
+    # Sparse mode basic run
+    sparse_trace = execute_circuit(
+        [Instruction("H", target=0), Instruction("S", target=0), Instruction("MEASURE", target=0)],
+        num_wires=1,
+        sparse=True,
+    )
+    assert len(sparse_trace) == 4
+
+    # Transport soundness harness (small)
+    verify_transport_soundness(max_qubits=2)
+
+
+if __name__ == "__main__":
+    _run_smoke_tests()
+
+    circuit_a = [
+        Instruction("H", target=0),
+        Instruction("S", target=0),
+        Instruction("CNOT", control=0, target=1),
+        Instruction("MEASURE", target=0),
+        Instruction("MEASURE", target=1),
+    ]
+
+    circuit_b = [
+        Instruction("S", target=1),
+        Instruction("H", target=1),
+        Instruction("CNOT", control=1, target=0),
+        Instruction("MEASURE", target=1),
+        Instruction("MEASURE", target=0),
+    ]
+
+    print("=== Trace A (dense) ===")
+    trace_a = execute_circuit(circuit_a, num_wires=2, theta=0.5, sparse=False)
+    for st in trace_a:
+        print(" ", st)
+    print("Shock profile A:", calculate_shock_profile(trace_a))
+
+    print("\n=== Trace A (sparse) ===")
+    trace_a_sparse = execute_circuit(circuit_a, num_wires=2, theta=0.5, sparse=True)
+    for st in trace_a_sparse:
+        print(" ", st)
+    print("Shock profile A (sparse):", calculate_shock_profile(trace_a_sparse))
+
+    print("\n=== Route Evaluation ===")
+    result = evaluate_compiler_routes([circuit_a, circuit_b], num_wires=2, theta=0.5, sparse=True)
+    for report in result["all_reports"]:
+        print({
+            "circuit_id": report["circuit_id"],
+            "theta": report["theta"],
+            "total_variation": report["total_variation"],
+            "glut_density": report["glut_density"],
+            "gap_density": report["gap_density"],
+            "is_determinized": report["is_determinized"],
+            "final_signature": report["final_signature"],
+            "shock_profile": report["shock_profile"],
+        })
+    print("Optimal route:", result["optimal_route"]["circuit_id"])
+
+    print("\n=== Theta Sweep ===")
+    sweep = theta_sweep_report(
+        [circuit_a, circuit_b],
+        thetas=[0.25, 0.4, 0.5, 0.6, 0.75],
+        num_wires=2,
+        sparse=True,
+    )
+    print("Winner sequence:", sweep["winner_sequence"])
+    print("Winner histogram:", sweep["winner_histogram"])
+    print("Winner transitions:", sweep["winner_transitions"])
+    print("Modal winner:", sweep["modal_winner"])
+    print("Stability fraction:", sweep["stability_fraction"])
+
+    print("\n=== Transport Soundness Check ===")
+    print(verify_transport_soundness(max_qubits=2))

@@ -8,9 +8,9 @@ By mapping quantum circuits onto a 4-valued paraconsistent logic structure (True
 
 ## 🚀 What is it good for?
 
-1. **The "Google Maps" for Quantum Compilers:** Evaluate thousands of different circuit routing options in milliseconds. The engine tracks the "Signature Shocks" and "Total Variation" of a circuit, instantly flagging the most logically stable, hardware-safe route.
-2. **Error Propagation Tracking:** Inject logical errors (Gluts/Gaps) into a circuit and instantly trace how they cascade through entanglement. Ideal for Quantum Error Correction (QEC) syndrome mapping.
-3. **Fast-Failing Bad Algorithms:** Use the engine as a pre-filter for quantum machine learning (VQA/QAOA). If a circuit generates massive "Coherence Defects," the engine rejects it in a fraction of a second, saving hours of expensive server simulation time.
+1. Evaluate thousands of different circuit routing options in milliseconds. The engine tracks the "Signature Shocks" and "Total Variation" of a circuit, instantly flagging the most logically stable, hardware-safe route.
+2. Inject logical errors (Gluts/Gaps) into a circuit and instantly trace how they cascade through entanglement. Ideal for Quantum Error Correction (QEC) syndrome mapping.
+3. Use the engine as a pre-filter for quantum machine learning (VQA/QAOA). If a circuit generates massive "Coherence Defects," the engine rejects it in a fraction of a second, saving hours of expensive server simulation time.
 
 ## ⚙️ How it Works (The Math)
 

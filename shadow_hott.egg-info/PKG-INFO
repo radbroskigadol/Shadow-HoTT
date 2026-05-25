@@ -1,3 +1,21 @@
+Metadata-Version: 2.4
+Name: shadow-hott
+Version: 0.2.5
+Summary: Exact Clifford signed-Pauli transport plus bilateral Shadow-HoTT diagnostics
+Author: David Betzer
+License-Expression: MIT
+Keywords: quantum,clifford,pauli,diagnostics,compiler,paraconsistent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Typing :: Typed
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+License-File: LICENSE-DOCS
+License-File: LICENSES.md
+License-File: NOTICE
+Dynamic: license-file
+
 # Shadow-HoTT
 
 Shadow-HoTT is an installable Python package for **exact signed-Pauli label transport through Clifford gates** plus a **bilateral four-valued diagnostic layer**.

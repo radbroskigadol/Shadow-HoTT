@@ -1,0 +1,252 @@
+{
+  "cases": [
+    {
+      "best_seconds": 0.1159008999999287,
+      "depth": 250,
+      "estimated_label_updates_per_second": 20095.771139971155,
+      "final_active_labels": 10,
+      "final_active_total_support": 22,
+      "final_hardware_violation_score": 12,
+      "final_nonlocal_label_count": 6,
+      "final_signature": [
+        5,
+        5,
+        0,
+        510
+      ],
+      "instructions_per_second": 2009.5771139971155,
+      "labels_per_step_estimate": 10,
+      "median_seconds": 0.12440428299998985,
+      "mode": "sparse",
+      "name": "sparse_4w_250d",
+      "notes": "",
+      "num_wires": 4,
+      "peak_tracemalloc_bytes": 534675,
+      "repeats": 2,
+      "worst_seconds": 0.132907666000051
+    },
+    {
+      "best_seconds": 0.36157144399999197,
+      "depth": 250,
+      "estimated_label_updates_per_second": 23438.56363253641,
+      "final_active_labels": 34,
+      "final_active_total_support": 280,
+      "final_hardware_violation_score": 1098,
+      "final_nonlocal_label_count": 32,
+      "final_signature": [
+        17,
+        17,
+        0,
+        8589934590
+      ],
+      "instructions_per_second": 689.369518604012,
+      "labels_per_step_estimate": 34,
+      "median_seconds": 0.3626502090000372,
+      "mode": "sparse",
+      "name": "sparse_16w_250d",
+      "notes": "",
+      "num_wires": 16,
+      "peak_tracemalloc_bytes": 1635033,
+      "repeats": 2,
+      "worst_seconds": 0.3637289740000824
+    },
+    {
+      "best_seconds": 1.7780892910000148,
+      "depth": 250,
+      "estimated_label_updates_per_second": 18138.866426841036,
+      "final_active_labels": 130,
+      "final_active_total_support": 250,
+      "final_hardware_violation_score": 206,
+      "final_nonlocal_label_count": 62,
+      "final_signature": [
+        65,
+        65,
+        0,
+        680564733841876926926749214863536422910
+      ],
+      "instructions_per_second": 139.52974174493104,
+      "labels_per_step_estimate": 130,
+      "median_seconds": 1.7917326934999664,
+      "mode": "sparse",
+      "name": "sparse_64w_250d",
+      "notes": "",
+      "num_wires": 64,
+      "peak_tracemalloc_bytes": 7611030,
+      "repeats": 2,
+      "worst_seconds": 1.805376095999918
+    },
+    {
+      "best_seconds": 0.08632548199989287,
+      "depth": 100,
+      "estimated_label_updates_per_second": 41659.600687314014,
+      "final_active_labels": 6,
+      "final_active_total_support": 6,
+      "final_hardware_violation_score": 0,
+      "final_nonlocal_label_count": 2,
+      "final_signature": [
+        3,
+        3,
+        0,
+        30
+      ],
+      "instructions_per_second": 1157.211130203167,
+      "labels_per_step_estimate": 36,
+      "median_seconds": 0.08641465449994712,
+      "mode": "dense",
+      "name": "dense_2w_100d",
+      "notes": "",
+      "num_wires": 2,
+      "peak_tracemalloc_bytes": 614798,
+      "repeats": 2,
+      "worst_seconds": 0.08650382700000137
+    },
+    {
+      "best_seconds": 0.2695599349999611,
+      "depth": 100,
+      "estimated_label_updates_per_second": 48346.552504489395,
+      "final_active_labels": 8,
+      "final_active_total_support": 10,
+      "final_hardware_violation_score": 0,
+      "final_nonlocal_label_count": 4,
+      "final_signature": [
+        4,
+        4,
+        0,
+        126
+      ],
+      "instructions_per_second": 360.79516794395073,
+      "labels_per_step_estimate": 134,
+      "median_seconds": 0.2771655744999748,
+      "mode": "dense",
+      "name": "dense_3w_100d",
+      "notes": "",
+      "num_wires": 3,
+      "peak_tracemalloc_bytes": 2290789,
+      "repeats": 2,
+      "worst_seconds": 0.2847712139999885
+    },
+    {
+      "best_seconds": 0.5350578329999962,
+      "depth": 50,
+      "estimated_label_updates_per_second": 47036.6301574516,
+      "final_active_labels": 10,
+      "final_active_total_support": 28,
+      "final_hardware_violation_score": 20,
+      "final_nonlocal_label_count": 8,
+      "final_signature": [
+        5,
+        5,
+        0,
+        510
+      ],
+      "instructions_per_second": 90.45505799509922,
+      "labels_per_step_estimate": 520,
+      "median_seconds": 0.5527606870000454,
+      "mode": "dense",
+      "name": "dense_4w_50d",
+      "notes": "",
+      "num_wires": 4,
+      "peak_tracemalloc_bytes": 4566126,
+      "repeats": 2,
+      "worst_seconds": 0.5704635410000947
+    },
+    {
+      "best_seconds": 0.4414967019999949,
+      "depth": 320,
+      "estimated_label_updates_per_second": 24191.009372902412,
+      "final_active_labels": 34,
+      "final_active_total_support": 58,
+      "final_hardware_violation_score": 44,
+      "final_nonlocal_label_count": 12,
+      "final_signature": [
+        17,
+        17,
+        0,
+        8589934590
+      ],
+      "instructions_per_second": 711.5002756736004,
+      "labels_per_step_estimate": 34,
+      "median_seconds": 0.4497538664999752,
+      "mode": "route-sparse",
+      "name": "route_eval_4x_16w_80d",
+      "notes": "winner=0; selection=['hardware_violation_score', 'total_label_variation', 'total_support_growth', 'total_signature_variation', 'glut_density', 'gap_density', 'circuit_id']",
+      "num_wires": 16,
+      "peak_tracemalloc_bytes": 1073631,
+      "repeats": 2,
+      "worst_seconds": 0.45801103099995544
+    },
+    {
+      "best_seconds": 0.1339914879999924,
+      "depth": 120,
+      "estimated_label_updates_per_second": 22450.919699045044,
+      "final_active_labels": 26,
+      "final_active_total_support": 154,
+      "final_hardware_violation_score": 402,
+      "final_nonlocal_label_count": 24,
+      "final_signature": [
+        13,
+        13,
+        0,
+        33554430
+      ],
+      "instructions_per_second": 863.4969115017325,
+      "labels_per_step_estimate": 26,
+      "median_seconds": 0.13896980800001302,
+      "mode": "openqasm2-sparse",
+      "name": "openqasm_parse_lint_12w_120d",
+      "notes": "includes OpenQASM text parse time",
+      "num_wires": 12,
+      "peak_tracemalloc_bytes": 661721,
+      "repeats": 2,
+      "worst_seconds": 0.14394812800003365
+    }
+  ],
+  "certificate": {
+    "created_at_utc": "2026-05-25T19:08:42.766240+00:00",
+    "extra": {
+      "benchmark_seed": 1729
+    },
+    "package": "shadow-hott",
+    "package_version": "0.2.4",
+    "platform": "Linux-4.4.0-x86_64-with-glibc2.41",
+    "python_version": "3.13.5 (main, Jun 25 2025, 18:55:22) [GCC 14.2.0]",
+    "scope": {
+      "exact": [
+        "signed Pauli label transport for H, S, Sdg, X, Y, Z, CNOT/CX, CZ, SWAP"
+      ],
+      "heuristic": [
+        "bilateral truth/falsity scoring",
+        "threshold cache",
+        "deterministic measurement proxy",
+        "route diagnostics"
+      ],
+      "not_claimed": [
+        "Born-rule quantum sampling",
+        "full stabilizer measurement update",
+        "arbitrary non-Clifford simulation"
+      ]
+    },
+    "scoring_version": "bilateral-threshold-label-support-v2",
+    "transport_soundness": {
+      "checks": [
+        "single-qubit generator image sanity checks passed",
+        "H^2, S/Sdg, S^4, and Pauli squares exhaustive on n=1 passed",
+        "H^2, S/Sdg, S^4, and Pauli squares exhaustive on n=2 passed",
+        "CNOT^2, CZ^2, and SWAP^2 exhaustive on n=2 passed",
+        "H^2, S/Sdg, S^4, and Pauli squares exhaustive on n=3 passed",
+        "CNOT^2, CZ^2, and SWAP^2 exhaustive on n=3 passed"
+      ],
+      "max_qubits": 3,
+      "passed": true
+    },
+    "transport_table_version": "clifford-h-s-sdg-pauli-cnot-cz-swap-v2"
+  },
+  "environment": {
+    "cpu_count": 56,
+    "implementation": "CPython",
+    "machine": "x86_64",
+    "platform": "Linux-4.4.0-x86_64-with-glibc2.41",
+    "processor": "unknown",
+    "python": "3.13.5 (main, Jun 25 2025, 18:55:22) [GCC 14.2.0]"
+  }
+}

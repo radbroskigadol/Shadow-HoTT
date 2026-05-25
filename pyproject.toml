@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shadow-hott"
+version = "0.2.5"
+description = "Exact Clifford signed-Pauli transport plus bilateral Shadow-HoTT diagnostics"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "David Betzer" }]
+keywords = ["quantum", "clifford", "pauli", "diagnostics", "compiler", "paraconsistent"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Typing :: Typed",
+]
+
+[project.scripts]
+shadow-hott = "shadow_hott.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["shadow_hott*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

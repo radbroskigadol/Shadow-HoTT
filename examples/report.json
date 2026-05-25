@@ -1,0 +1,26 @@
+{
+  "final_state": {
+    "carrier": "MEASURE_Z[1]=0",
+    "last_measurements": {
+      "0": 0,
+      "1": 0
+    },
+    "num_wires": 2,
+    "provenance": 5,
+    "signature4": [
+      5,
+      5,
+      0,
+      26
+    ],
+    "sparse": true,
+    "theta": 0.5
+  },
+  "signature4": [
+    5,
+    5,
+    0,
+    26
+  ],
+  "steps": 5
+}

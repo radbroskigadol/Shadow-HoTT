@@ -1,0 +1,37 @@
+Shadow-HoTT Licensing Notice
+
+Copyright (c) 2026 David Betzer.
+
+License split
+-------------
+
+Software code is licensed under the MIT License. This includes Python source
+files under shadow_hott/, Python examples, test code, build/packaging metadata,
+CI configuration, and machine-readable configuration files.
+
+Documentation, mathematical exposition, diagrams, and non-code prose are
+licensed under Creative Commons Attribution 4.0 International (CC BY 4.0).
+This includes README.md, mathematics.md, AUDIT_FIX_REPORT.md, QA_TEST_REPORT.md,
+and other prose documentation unless a file says otherwise.
+
+Preferred attribution
+---------------------
+
+Shadow-HoTT by David Betzer
+GitHub: https://github.com/radbroskigadol/Shadow-HoTT
+Licenses: MIT for code; CC BY 4.0 for documentation and exposition.
+
+Suggested citation
+------------------
+
+David Betzer, Shadow-HoTT: Exact Clifford signed-Pauli transport plus bilateral
+four-valued diagnostics, 2026.
+
+Notes
+-----
+
+The MIT License requires preserving the copyright and permission notices in
+copies or substantial portions of the software.
+
+CC BY 4.0 requires appropriate credit, a link to the license, and indication of
+changes when documentation or exposition is shared or adapted.

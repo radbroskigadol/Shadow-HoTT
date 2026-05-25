@@ -6,3 +6,5 @@ build/
 dist/
 .env
 .venv/
+benchmark_results_quick/
+examples/report.json
